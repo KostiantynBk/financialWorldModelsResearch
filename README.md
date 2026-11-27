@@ -35,4 +35,4 @@ Start with a simple baseline, use data that would have been available at the tim
 
 ## Experiments
 
-- **[Execution planning with a market model](experiments/execution-planning/README.md):** buying a fixed quantity before a deadline in a synthetic market. Stage 1 uses a hand-specified model as a reference ceiling and is complete. Learned world models start in Stage 2. See the [research plan](experiments/execution-planning/PLAN.md).
+- **[Execution planning with a market model](experiments/execution-planning/README.md):** buying a fixed quantity before a deadline in a synthetic market. Stages 1 and 2 are complete. In Stage 2, a small learned world model plus a planner beat the best simple rule, capturing 80–98% of the available gain depending on training data. A classical model with the simulator's exact form was slightly better still. Stage 3 tests markets that break the classical model's assumptions. See the [research plan](experiments/execution-planning/PLAN.md).
