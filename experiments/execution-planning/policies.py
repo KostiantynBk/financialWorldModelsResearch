@@ -116,7 +116,7 @@ class Planner:
     def __init__(self, model: MarketParams, use_history: bool = True, name: str | None = None):
         self.model = model
         self.use_history = use_history
-        self.name = name or ("Planner" if use_history else "Planner (latest signal only)")
+        self.name = name or ("True model + planner" if use_history else "True model, latest signal only + planner")
         self.filter = AlphaFilter(model)
         n, phi = model.n_steps, model.phi
         # drift_weights[t][j] = sum_{k=j}^{H-2} phi^k for horizon H = n - t; the last entry is 0.
@@ -138,3 +138,72 @@ class Planner:
         drift_to_go = m[:, None] * self.drift_weights[t][None, :]
         schedule = project_to_simplex(drift_to_go / (2.0 * self.model.impact), remaining)
         return schedule[:, 0]
+
+
+class KalmanForecaster:
+    """Hand-specified predictor: Kalman-filtered trend, projected forward with the model's fade rate.
+
+    `update` returns the expected price change in each remaining step t..N-2, shape (E, N-1-t).
+    """
+
+    def __init__(self, model: MarketParams):
+        self.model = model
+        self.filter = AlphaFilter(model)
+        self.decay = model.phi ** np.arange(model.n_steps)
+
+    def reset(self, n_episodes: int) -> None:
+        self.filter.reset(n_episodes)
+
+    def update(self, t, price_t, signal_t):
+        m = self.filter.update(price_t, signal_t)
+        return m[:, None] * self.decay[None, : self.model.n_steps - 1 - t]
+
+
+class ForecastPlanner:
+    """The same planner as `Planner`, driven by any predictor of future price changes.
+
+    The cost model (impact) is assumed, not learned; only the market forecast varies.
+    """
+
+    def __init__(self, forecaster, impact: float, name: str):
+        self.forecaster = forecaster
+        self.impact = impact
+        self.name = name
+
+    def reset(self, n_episodes: int) -> None:
+        self.forecaster.reset(n_episodes)
+
+    def act(self, t, price_t, signal_t, remaining):
+        expected_changes = self.forecaster.update(t, price_t, signal_t)
+        tail = np.cumsum(expected_changes[:, ::-1], axis=1)[:, ::-1]
+        drift_to_go = np.concatenate([tail, np.zeros((tail.shape[0], 1))], axis=1)
+        schedule = project_to_simplex(drift_to_go / (2.0 * self.impact), remaining)
+        return schedule[:, 0]
+
+
+def forecast_cumulative(forecaster, paths, horizons) -> dict:
+    """Forecasts of S_{t+h} - S_t made with data up to t, for each h in `horizons` (None = to the deadline).
+
+    Returns {h: array (E, N-1)} indexed by decision time t; entries with t + h > N - 1 are NaN.
+    """
+    n_episodes, n = paths.price.shape
+    forecaster.reset(n_episodes)
+    out = {h: np.full((n_episodes, n - 1), np.nan) for h in horizons}
+    for t in range(n - 1):
+        cumulative = np.cumsum(forecaster.update(t, paths.price[:, t], paths.signal[:, t]), axis=1)
+        for h in horizons:
+            if h is None:
+                out[h][:, t] = cumulative[:, -1]
+            elif t + h <= n - 1:
+                out[h][:, t] = cumulative[:, h - 1]
+    return out
+
+
+def forecast_drift_to_go(forecaster, paths) -> np.ndarray:
+    """Forecast of S_{N-1} - S_t for t = 0..N-2, made with data up to t. Shape (E, N-1)."""
+    n_episodes, n = paths.price.shape
+    forecaster.reset(n_episodes)
+    out = np.zeros((n_episodes, n - 1))
+    for t in range(n - 1):
+        out[:, t] = forecaster.update(t, paths.price[:, t], paths.signal[:, t]).sum(axis=1)
+    return out
