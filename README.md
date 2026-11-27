@@ -32,3 +32,7 @@ For example, a portfolio planner could compare rebalancing now, rebalancing grad
 ## How the research will be evaluated
 
 Start with a simple baseline, use data that would have been available at the time, and evaluate on later periods. Report simulation quality separately from whether it improves decisions. Where trading is involved, account for transaction costs and slippage. Document assumptions and limitations, including when the simpler baseline wins.
+
+## Experiments
+
+- **[Execution planning with a market model](experiments/execution-planning/README.md):** buying a fixed quantity before a deadline in a synthetic market. Stage 1 uses a hand-specified model as a reference ceiling and is complete. Learned world models start in Stage 2. See the [research plan](experiments/execution-planning/PLAN.md).
