@@ -1,6 +1,6 @@
 # Research plan: execution planning with a market model
 
-**Last updated:** 27 November 2026. **Status:** Stages 1 and 2 complete; Stage 3 is next. This plan is updated as results arrive. Results are in the [experiment README](README.md) and [results/](results/).
+**Last updated:** 28 November 2026. **Status:** Stages 1 and 2 complete. Stage 3 is prespecified below and has not been run. This plan is updated as results arrive. Results are in the [experiment README](README.md) and [results/](results/).
 
 ## Question
 
@@ -35,7 +35,7 @@ Because the market is exogenous in Stages 1–4, the only part that can be learn
 |---|---|---|---|---|
 | **1** | Hand-specified, with the simulator's true parameters (ceiling) | Linear-Gaussian simulator | Are the simulator and planner correct? Is there headroom over simple rules? | **Done** (25 Nov 2026) |
 | **2** | **Learned world model:** a small recurrent neural predictor; plus a fitted hand-specified model as the classical baseline | Same simulator | Can a learned model match the classical model when the classical assumptions hold? How much data does it need? | **Done** (27 Nov 2026) |
-| **3** | Same models | Misspecified simulator: regime switches, fat-tailed shocks, drifting signal strength | Does learning beat hand-specification when its assumptions are wrong? | Next |
+| **3** | Same models, plus a fitted regime-aware classical model and a larger learned variant | Misspecified simulator: regime switches, fat-tailed shocks, drifting signal strength | Does learning beat hand-specification when its assumptions are wrong? | Prespecified (28 Nov 2026) |
 | **4** | Same, trained on historical data | Real crypto market data, with chronological splits | Do the gains survive on a real market? | Planned |
 | **5** | Action-conditioned learned model; the planner searches candidate plans | Simulator with market impact | Can a model learn how our trades move the market, and does planning with it help? | Planned |
 | Secondary | Model-free PPO (HRT-style) | As in Stages 2–3 | Is it better to plan with a model or to learn a policy directly? | Planned |
@@ -64,10 +64,67 @@ Because the market is exogenous in Stages 1–4, the only part that can be learn
 - **Probing learned models:** any readout from a learned model's internal state is compared with the same readout from untrained networks of the same architecture. Decision value is judged by the forecasts the planner uses, not by what the internal state contains. See the [Stage 2 supplement](results/stage2_probe.md).
 - **Reporting:** training budgets (data size, steps, wall-clock time, parameter count) are reported. Negative results are reported.
 
+## Stage 3 prespecification
+
+Registered on 28 November 2026, before any Stage 3 code was run. Changes after this point will be listed as deviations.
+
+**Question (H4, second half):** when the simulated market breaks the classical model's assumptions, does the learned model + planner beat the fitted classical model + planner?
+
+**Design principle.** A violated assumption matters only if it changes the forecast the planner uses. So each scenario must first show misspecification headroom (Gate C1) before any learned model is trained. Every scenario keeps the average signal strength of the base case (the trend explains about 1% of one-minute price variance) and its cost model. Regimes are drawn once per hour and stay fixed within it, so the best possible forecaster can be computed. The base case's price noise is σ = 5 bps per minute; *a* denotes the base trend's standard deviation, which gives 1%.
+
+| | Scenario | Specification | Severe setting (used only if Gate C1 fails) |
+|---|---|---|---|
+| **A** | Signal on/off | Each hour is active with probability ½. Active: trend explaining 2%, half-life 10 minutes, signal noise equal to the active trend's standard deviation. Quiet: no trend, and the signal is pure noise with the same total variance as an active signal. | Active with probability 0.3, trend explaining 3.3% |
+| **B** | Fast or slow trends | Each hour has a half-life of 3 or 30 minutes, with probability ½ each. Trend size *a* and signal noise *a* in both. | Half-lives of 2 and 60 minutes |
+| **C** | Signal outliers | Base trend. Each signal reading's noise is normal with standard deviation *s* with probability 0.9, or 3*s* with probability 0.1, where *s* = *a*/√1.8, so the noise variance is unchanged. | 5% of readings at 5*s*, with *s* = *a*/√2.2 |
+| D | Price outliers (negative control) | Base trend and signal. Price noise as in C, scaled to σ. Expected to fail Gate C1. | None |
+
+**Strategies** (same planner and cost model as Stages 1–2):
+- TWAP, and the urgency rule with β tuned on training hours; the best simple rule is selected on training hours.
+- **True model + planner** (ceiling): the posterior-mean forecast under the scenario's true structure and parameters. In A and B it is exact: two Kalman filters weighted by the posterior regime probability. In C and D it is a Gaussian-sum filter with moment matching, checked against a particle filter on validation hours.
+- **Fitted classical model + planner:** Stage 2's linear-Gaussian model fitted by maximum likelihood. It is misspecified here.
+- **Fitted regime-aware model + planner** (secondary; A and B only): the correct two-regime structure with all parameters fitted by maximum likelihood.
+- **Learned model + planner** (primary): Stage 2's architecture and training recipe, unchanged (1,666 parameters).
+- **Larger learned model + planner** (secondary), selected on validation hours before the test run.
+  - Candidates: GRU with 32 units, latent 16, width 64 (6,146 parameters); or GRU with 64 units, latent 16, width 64 (16,258 parameters). Training recipe unchanged.
+  - Selection rule: train each candidate on run 0's 1,000 training hours in every main scenario that passes Gate C1. Choose the lower mean validation cost averaged over those scenarios; on a tie, the smaller candidate.
+
+**Hypotheses:**
+- **H4b (primary).** In each main scenario (A, B, C) that passes Gate C1, the learned model + planner has a lower mean test cost than the fitted classical model + planner, at 1,000 training hours.
+  - *Supported* if the paired 95% interval of (learned − fitted) lies entirely below zero.
+  - We also report whether it survives a Bonferroni correction over the three scenarios (98.3% intervals).
+- **Secondary:**
+  - the learned model + planner beats the best simple rule at 1,000 hours;
+  - its cost above the ceiling shrinks with training data and as its forecast approaches the ceiling's forecast;
+  - comparisons with the fitted regime-aware model (A and B) and with the larger learned variant.
+- **Negative control:** in D, we expect Gate C1 to fail and no learned advantage.
+
+**Gate C1 (misspecification headroom).** Run on validation seed 212 before any learned model is trained:
+1. Fit the classical model on run 0's 1,000 training hours.
+2. Measure gap = fitted classical + planner cost − true model + planner cost, on 20,000 validation hours.
+3. **Pass** if the gap is at least 0.15 bps and its 95% interval excludes zero. (Even in Stage 2's ideal setting, the learned model stayed 0.06 bps above the ceiling.)
+4. If a main scenario fails, it is rerun once at its severe setting. If it still fails, it is reported as a case where the violation does not matter for decisions, and no learned models are trained for it.
+5. D is reported regardless, and the primary learned model is trained for it at 1,000 hours only, to check for spurious wins.
+
+**Data and seeds:**
+- Training sets of 200, 1,000 and 5,000 hours, nested within a 5,000-hour pool per run; 5 runs.
+- Run *r* uses training seed 111 + *r*, and *r* also seeds the network.
+- Validation seed 212 is used for Gate C1, model selection and all code checks. Test seed 313 (20,000 hours) is used only by the final run.
+- Base shocks are shared across scenarios (common random numbers); regime and outlier draws use a separate random stream.
+
+**Metrics:**
+- mean implementation shortfall with paired 95% intervals, and run-to-run ranges;
+- CVaR95;
+- forecast R² at 1, 5 and 15 minutes ahead and to the deadline;
+- the 30-minute forecast's correlation, size and relative error against the true model's forecast;
+- costs by regime (A: active vs quiet hours; B: fast vs slow hours);
+- training budgets.
+
 ## Decision gates
 
 - **Gate A — simulator sanity:** passed (Stage 1).
 - **Gate B — headroom:** passed in all 21 settings tested (Stage 1).
+- **Gate C1 — misspecification headroom:** prespecified for Stage 3 (above).
 - **Gate C — learned vs classical vs simple rules:** after Stages 2–3, decide whether real data and the PPO comparison are justified. Stage 2 is done; the decision follows Stage 3.
 
 ## Stage 1 summary
