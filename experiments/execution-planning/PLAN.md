@@ -1,6 +1,6 @@
 # Research plan: execution planning with a market model
 
-**Last updated:** 28 November 2026. **Status:** Stages 1, 2 and 3 complete. The Gate C decision (real data and the PPO comparison) is next. This plan is updated as results arrive. Results are in the [experiment README](README.md) and [results/](results/).
+**Last updated:** 28 November 2026. **Status:** Stages 1, 2 and 3 and the real-data calibration complete. The Gate C decision is next. This plan is updated as results arrive. Results are in the [experiment README](README.md) and [results/](results/).
 
 ## Question
 
@@ -40,7 +40,7 @@ Because the market is exogenous in Stages 1–4, the only part that can be learn
 | **5** | Action-conditioned learned model; the planner searches candidate plans | Simulator with market impact | Can a model learn how our trades move the market, and does planning with it help? | Planned |
 | Secondary | Model-free PPO (HRT-style) | As in Stages 2–3 | Is it better to plan with a model or to learn a policy directly? | Planned |
 
-**Calibration with real data**, which can run alongside Stage 3. On public crypto data, measure the volatility and spread, and how strongly and for how long candidate signals predict the next minutes' price moves. Candidates include order-flow imbalance and recent returns. These numbers place reality within the Stage 1 headroom table. Order-flow imbalance is known to track same-interval price changes ([Cont, Kukanov & Stoikov, 2014](https://arxiv.org/abs/1011.6402)); its forward-looking power must be measured.
+**Calibration with real data** (done, 28 November 2026; see the [experiment README](README.md#calibration-on-real-data-how-predictive-are-public-signals)). On public crypto data, measure the volatility and spread, and how strongly and for how long candidate signals predict the next minutes' price moves. Candidates include order-flow imbalance and recent returns. These numbers place reality within the Stage 1 headroom table. Order-flow imbalance is known to track same-interval price changes ([Cont, Kukanov & Stoikov, 2014](https://arxiv.org/abs/1011.6402)); its forward-looking power must be measured.
 
 ## Hypotheses
 
@@ -128,7 +128,7 @@ Registered on 28 November 2026, before any Stage 3 code was run. Changes after t
 - **Gate A — simulator sanity:** passed (Stage 1).
 - **Gate B — headroom:** passed in all 21 settings tested (Stage 1).
 - **Gate C1 — misspecification headroom:** prespecified for Stage 3 (above).
-- **Gate C — learned vs classical vs simple rules:** after Stages 2–3, decide whether real data and the PPO comparison are justified. Stages 2 and 3 are done; the decision is pending.
+- **Gate C — learned vs classical vs simple rules:** after Stages 2–3, decide whether real data and the PPO comparison are justified. Stages 2 and 3 and the calibration are done; the decision is pending. Evidence: learning beats a misspecified model by small margins (Stage 3), and the public one-minute signals tested show essentially no out-of-sample predictability (next-minute R² at most about 0.01%, against 0.11% in the weakest Stage 1 setting).
 
 ## Stage 1 summary
 

@@ -1,6 +1,6 @@
 # Execution planning with a market model
 
-**Status:** Stage 1 (simulator checks and planning headroom) completed on 25 November 2026. Stage 2 (a learned world model and a fitted classical model) completed on 27 November 2026. Stage 3 (markets that break the classical model's assumptions) completed on 28 November 2026. All results come from a synthetic market with illustrative parameters. They say nothing about real markets or live trading. The staged [research plan](PLAN.md) is updated as results arrive.
+**Status:** Stage 1 (simulator checks and planning headroom) completed on 25 November 2026. Stage 2 (a learned world model and a fitted classical model) completed on 27 November 2026. Stage 3 (markets that break the classical model's assumptions) completed on 28 November 2026. A calibration on real crypto data (28 November 2026) found no measurable predictability in the public signals tested. All simulation results come from a synthetic market with illustrative parameters. They say nothing about real markets or live trading. The staged [research plan](PLAN.md) is updated as results arrive.
 
 **Terminology:** Stage 1's planner uses a *hand-specified model*: our own equations with the simulator's true parameters. In this repository, *world model* means a model learned from data; the first learned model is tested in Stage 2.
 
@@ -77,7 +77,7 @@ It is trained self-supervised to predict future observations at all horizons by 
 ```bash
 cd experiments/execution-planning
 pip install -r requirements.txt
-python -m pytest -q        # 25 correctness tests
+python -m pytest -q        # 32 correctness tests
 python run_stage1.py       # about 3 minutes on a laptop CPU; writes results/
 python run_stage2.py       # about 23 minutes on a laptop CPU; writes results/stage2*
 python probe_stage2.py     # about 30 minutes; Stage 2 supplement, writes results/stage2_probe*
@@ -85,6 +85,7 @@ python run_stage3.py gate      # Stage 3 Gate C1 on validation hours, about 3 mi
 python run_stage3.py select    # choose the larger learned model on validation hours, about 15 minutes
 python run_stage3.py main A    # test run for one scenario (A, B, C or D), 1-2.5 hours each; run them in parallel
 python run_stage3.py report    # writes results/stage3*
+python calibrate_crypto.py     # real-data calibration: downloads public Binance data (about 50 MB), about 5 minutes
 ```
 
 Tested with Python 3.14, NumPy 2.4, SciPy 1.17, PyTorch 2.12 (CPU) and pytest 9.1. Seeds: Stage 1 training 101 (10,000 episodes) and validation 202 (20,000 episodes). Stage 2 training seeds 101–105 (one per run) and test seed 303 (20,000 episodes), first used in Stage 2.
@@ -101,6 +102,7 @@ Tested with Python 3.14, NumPy 2.4, SciPy 1.17, PyTorch 2.12 (CPU) and pytest 9.
 - The supplement's forecast comparison is exact for the true model and scales correctly.
 - Stage 3: the scenario simulator reproduces Stage 1's simulator in the base case, and each scenario matches its design (average trend strength, equal signal variance across A's regimes, B's persistence, C's outlier variance and kurtosis).
 - Stage 3: the best-possible forecaster equals the Kalman filter on the base market, ignores duplicated regimes, has no look-ahead, beats the misspecified Kalman filter in A, B and C, and agrees with a particle filter in C. The regime-aware fit recovers scenario A's parameters.
+- Calibration: data parsing handles both timestamp units, gaps are filled, features use only the past, and on simulated data the pipeline recovers the theoretical next-minute R² (0.5%) and the trend's half-life.
 
 ## Stage 1 results
 
@@ -265,6 +267,41 @@ The violations that hurt the classical model most still cost it only 0.1–0.3 b
 3. **Learning gains grow with data.** From 1,000 to 5,000 hours the learned model moved closer to the ceiling in A and B (in C it stayed about 0.08 bps short), while the misspecified classical model could not improve.
 4. **These gaps are small relative to the gain from planning itself** (about 2–3 bps over the best simple rule). The bigger question for real markets remains whether real signals are predictive enough, which the planned calibration on real data measures.
 
+## Calibration on real data: how predictive are public signals?
+
+Stages 1–3 used an invented signal. The planner can only gain if real signals predict the next minutes' price moves. This calibration measures that on real data, with the same statistics computed on the simulator so that real markets can be placed in the Stage 1 headroom table. The analysis choices were fixed in [calibrate_crypto.py](calibrate_crypto.py) before any result was seen; one diagnostic, marked as such, was added afterwards. Full tables are in [results/calibration.md](results/calibration.md).
+
+**Data:**
+- Binance spot BTCUSDT and ETHUSDT one-minute bars from the public archive ([data.binance.vision](https://data.binance.vision)), November 2025 to October 2026: 525,600 minutes per market, with no gaps. Every file's checksum was verified.
+- The raw data is downloaded by the script and not redistributed here.
+- Fit period: November 2025 to June 2026. Evaluation period: July to October 2026.
+
+**Signals known at the close of each minute:**
+- *trade imbalance*: aggressive buy volume minus aggressive sell volume, over total volume;
+- the last one-minute return;
+- the last 30 minutes of both ("history").
+
+Each is fitted by least squares on the fit period and scored out of sample. Intervals are 95% block-bootstrap intervals over days.
+
+| | BTCUSDT | ETHUSDT | Simulator, base case | Simulator, weakest grid cell (R² 0.25%, half-life 3) |
+|---|---|---|---|---|
+| One-minute volatility (bps), fit / evaluation | 6.7 / 4.8 | 9.2 / 6.6 | 5.0 | 5.0 |
+| Same-minute R²: the imbalance explaining its own minute's return | 16.9% [13.7, 19.6] | 10.3% [8.0, 12.6] | — | — |
+| **Next-minute R² from the imbalance** | **+0.005%** [+0.001, +0.010] | **−0.004%** [−0.007, +0.000] | +0.49% | +0.11% |
+| History R², 5 / 30 minutes ahead | −0.03% / −0.20% | −0.01% / −0.17% | +2.8% / +4.1% | +0.23% / +0.07% |
+| Stage 1 planning headroom over the best simple rule | not estimable | not estimable | +2.87 bps | +0.28 bps |
+
+**Diagnostic (added after the first results):** the negative values grow with the horizon because each fitted intercept carried the fit period's average drift (falling prices) into a rising evaluation period. Refitted without an intercept, every predictor scores about zero. The largest value is BTC's next-minute imbalance at +0.009% [+0.007, +0.013]; all other intervals lie within about ±0.26% and mostly cover zero.
+
+**What to take from this:**
+1. **The imbalance describes the present, not the future.** It explains 10–17% of the price move in its own minute, consistent with [Cont, Kukanov & Stoikov (2014)](https://arxiv.org/abs/1011.6402), but essentially nothing about the following minutes.
+2. **Measured predictability is at least ten times weaker than the weakest Stage 1 setting** and about fifty times weaker than the base case. In the Stage 1 table, even the weakest setting left only +0.28 bps of planning headroom. With these signals, a planner has no measurable drift to exploit over a one-hour order, so Stages 1–3's gains would not appear.
+3. **Volatility is in line with the simulator** (4.8–9.2 bps per minute against 5).
+4. **This is a statement about these signals, not about markets in general.** It does not rule out predictability:
+   - at higher frequency (seconds), where order-flow effects are known to decay fast; the predictive slope here halves within about one minute and then changes sign;
+   - in full order-book data or other signals;
+   - in the proprietary signals that firms such as HRT use.
+
 ## Limitations
 
 - **Parameters:** illustrative and uncalibrated. Headroom depends strongly on signal strength and persistence.
@@ -277,8 +314,9 @@ The violations that hurt the classical model most still cost it only 0.1–0.3 b
 - **Stage 3 scenarios:** regimes reset every hour, and strategies get no data from earlier hours, which makes regime detection harder than with persistent regimes. B and C ran at their prespecified severe settings because the prespecified settings did not leave enough headroom (Gate C1). Forecast metrics use the first 5,000 of the 20,000 test hours.
 - **Stage 3 test-seed use:** an aborted launch ran for a few seconds before the reported run and produced no results.
 - **Test seed use:** before the reported run, a code check ran on 500 test hours with deliberately undertrained models, and an aborted first launch computed only the TWAP and true-model test costs. No setting was changed afterwards.
-- **Scope:** synthetic results only. They are not evidence about real markets or live trading.
+- **Calibration:** two markets on one venue, one year, one-minute bars, two public signals and linear predictors. The spread is not measured: in this cost model every strategy buys the same total quantity, so the spread is the same for all and does not affect headroom. Market impact cannot be measured from public data.
+- **Scope:** the execution results are synthetic, and the calibration is descriptive. Neither is evidence about live trading.
 
 ## Next step
 
-Stages 2 and 3 complete the synthetic comparison of learned and hand-specified models. Gate C in the [research plan](PLAN.md) now decides whether a real-data stage and the PPO comparison are justified. The most informative next measurement is the planned calibration on public crypto data: how strongly, and for how long, real signals predict the next minutes' price moves. That places real markets within the Stage 1 headroom table and tells us whether planning has anything to gain there.
+Stages 2 and 3 complete the synthetic comparison of learned and hand-specified models, and the calibration shows that the public one-minute signals tested carry no exploitable drift. Gate C in the [research plan](PLAN.md) decides what comes next. A real-data execution stage with these signals would be expected to show no planning gain. Options include richer or higher-frequency signals, or applying world models where real targets are predictable, such as volatility and risk.
