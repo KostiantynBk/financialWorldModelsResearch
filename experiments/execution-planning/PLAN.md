@@ -1,6 +1,6 @@
 # Research plan: execution planning with a market model
 
-**Last updated:** 28 November 2026. **Status:** Stages 1, 2 and 3 and the real-data calibration complete. The Gate C decision is next. This plan is updated as results arrive. Results are in the [experiment README](README.md) and [results/](results/).
+**Last updated:** 28 November 2026. **Status:** Stages 1, 2 and 3 and the real-data calibration complete. Gate C decided: Stage 4 tests volatility forecasting on real data. It is prespecified below and has not been run. This plan is updated as results arrive. Results are in the [experiment README](README.md) and [results/](results/).
 
 ## Question
 
@@ -36,7 +36,7 @@ Because the market is exogenous in Stages 1–4, the only part that can be learn
 | **1** | Hand-specified, with the simulator's true parameters (ceiling) | Linear-Gaussian simulator | Are the simulator and planner correct? Is there headroom over simple rules? | **Done** (25 Nov 2026) |
 | **2** | **Learned world model:** a small recurrent neural predictor; plus a fitted hand-specified model as the classical baseline | Same simulator | Can a learned model match the classical model when the classical assumptions hold? How much data does it need? | **Done** (27 Nov 2026) |
 | **3** | Same models, plus a fitted regime-aware classical model and a larger learned variant | Misspecified simulator: regime switches, fat-tailed shocks, drifting signal strength | Does learning beat hand-specification when its assumptions are wrong? | **Done** (28 Nov 2026) |
-| **4** | Same, trained on historical data | Real crypto market data, with chronological splits | Do the gains survive on a real market? | Planned |
+| **4** | Learned volatility model vs classical volatility models, with a risk-aware planner | Real crypto market data (Binance BTCUSDT, ETHUSDT), with chronological splits | Do volatility forecasts, and learned ones in particular, make risk-aware execution cheaper on real prices? | Prespecified (28 Nov 2026) |
 | **5** | Action-conditioned learned model; the planner searches candidate plans | Simulator with market impact | Can a model learn how our trades move the market, and does planning with it help? | Planned |
 | Secondary | Model-free PPO (HRT-style) | As in Stages 2–3 | Is it better to plan with a model or to learn a policy directly? | Planned |
 
@@ -123,12 +123,76 @@ Registered on 28 November 2026, before any Stage 3 code was run. Changes after t
 - costs by regime (A: active vs quiet hours; B: fast vs slow hours);
 - training budgets.
 
+## Stage 4 prespecification
+
+Registered on 28 November 2026, before any Stage 4 code was run. Changes after this point will be listed as deviations.
+
+**Why this stage.** The calibration found no out-of-sample predictability of price direction in the public one-minute signals tested, so a planner has no drift to exploit. Volatility is different. In an exploratory check on November–December 2025, inside the validation window below, the past predicted next-hour realized variance with in-sample R² of 0.61–0.70, and per-minute volatility differed about 4× between calm and busy hours. A risk-averse execution schedule depends on volatility forecasts rather than drift forecasts ([Almgren & Chriss, 2001](https://doi.org/10.21314/JOR.2001.041)).
+
+**Question:** on real prices, does a planner that uses a learned volatility model achieve a lower risk-adjusted execution cost than one that uses the best classical volatility model, or no volatility forecast?
+
+| | In Stage 4 |
+|---|---|
+| **Observed** at each minute | Past one-minute returns, volume, trade imbalance and time of day |
+| **Predicted** | The variance of each remaining minute's price change until the deadline |
+| **Action** | How much to buy this minute: between zero and the remaining quantity |
+| **Decision improved** | The schedule of a one-hour buy order, judged by expected cost plus a risk penalty |
+| **Market impact** | Not modeled in the price path: real prices are replayed unchanged, and our trades pay an assumed temporary impact κv², with κ = 30 bps |
+
+**Decision problem:**
+- *Episodes:* every UTC clock hour with complete data in the hour and the 24 hours before it.
+- *Prices and trades:* decision times are t = 0, …, 59. Sₜ is the log close of the minute before decision t, in bps relative to S₀ (the last close before the hour). One unit must be bought by t = 59; buying vₜ costs vₜ(Sₜ + κvₜ).
+- *Exposure:* let qⱼ be the quantity still to buy after the trades at times 0, …, j−1. Implementation shortfall is IS = Σₜ κvₜ² + Σⱼ qⱼΔSⱼ for j = 1, …, 59, where ΔSⱼ = Sⱼ − Sⱼ₋₁.
+- *Primary metric:* the hour's risk-adjusted cost C = Σₜ κvₜ² + λ Σⱼ qⱼ²ΔSⱼ². With no predictable drift, its expectation is the mean-variance objective. Using realized squared moves avoids the large noise of the unpredictable price-move term. Mean IS, and mean IS + λ × variance of IS across hours, are also reported.
+- *Planner:* at each decision time, with R still to buy and forecast variances σ̂ⱼ² for the remaining minutes, choose the remaining quantities to minimize κΣv² + λΣσ̂ⱼ²qⱼ², with qₜ = R and q₆₀ = 0. The minimizer solves a tridiagonal linear system and never sells. The first trade is executed and the plan is recomputed the next minute.
+- *Risk aversion:* λ is set per market from the training period. At the training median of hourly per-minute volatility, the constant-volatility planner completes half the order in 15 minutes (primary), or in 5 or 30 minutes (secondary).
+
+**Strategies** (same planner and cost model):
+- TWAP.
+- **Constant-volatility model + planner:** the training median volatility, as in classic Almgren–Chriss.
+- **Seasonal EWMA model + planner (classical):**
+  - a time-of-day variance profile: the training mean of squared returns per minute of the day, smoothed by a centered 31-minute circular moving average;
+  - multiplied by an exponentially weighted average of deseasonalized squared returns, with its half-life chosen on training data from {15, 30, 60, 120, 240} minutes by QLIKE;
+  - the forecast level is flat over the horizon.
+- **Seasonal HAR model + planner (classical**, [Corsi, 2009](https://doi.org/10.1093/jjfinec/nbp001)**):**
+  - a least-squares regression of the log of the next 60 minutes' mean deseasonalized squared return on the logs of its means over the last 60, 360 and 1,440 minutes;
+  - fitted on training decision times every 15 minutes, with a log-normal bias correction;
+  - forecast = profile × level, flat over the horizon.
+- **Learned model + planner (primary learned model):**
+  - a GRU encoder (32 units) reads the last 240 minutes and the current hour so far;
+  - inputs: scaled return and log squared return, standardized log volume, trade imbalance, and time of day (sine and cosine at one and two cycles per day);
+  - a 16-dimensional latent state is rolled forward by a learned residual transition that also receives each future minute's time of day, and decoded into the log variance of each future minute;
+  - trained by the Gaussian negative log-likelihood of the returns, a proper score for variance forecasts, with Adam, on January 2023 to December 2024, with early stopping on January to June 2025;
+  - 5 seeds per market; no hyperparameter search.
+- **Hour-volatility oracle + planner (not achievable):** the hour's own realized variance per minute, constant within the hour. A reference for perfect hour-level volatility knowledge.
+- **Best classical model:** whichever of the constant, EWMA and HAR models has the lowest validation risk-adjusted cost at the primary urgency, chosen per market.
+
+**Hypotheses:**
+- **V2 (primary):** the learned model + planner has a lower mean risk-adjusted cost than the best classical model + planner on test hours, at the primary urgency. Each market is tested separately. *Supported* if the 95% interval of the paired difference lies below zero; whether it survives a Bonferroni correction over the two markets (97.5% intervals) is also reported.
+- **V1 (forecast quality):** the learned model's test QLIKE is lower than the best classical model's. QLIKE ([Patton, 2011](https://doi.org/10.1016/j.jeconom.2010.03.034)) is computed for the forecast total variance of the remaining exposure minutes, at decision times 0, 15, 30 and 45, and averaged.
+- **V3:** the best classical model + planner has a lower mean risk-adjusted cost than the constant-volatility model + planner, i.e. volatility forecasts have decision value at all.
+- **V4 (secondary; follows the candidate test in our Lambda research note):** does the learned model's *surprise* add information beyond classical features? Three variants of the seasonal HAR are compared by test QLIKE for the next hour's variance at decision time 0:
+  - (a) the seasonal HAR alone;
+  - (b) (a) plus classical extras: the HAR's own last-hour surprise (log of realized over forecast deseasonalized variance) and the mean absolute trade imbalance over the last 15 minutes;
+  - (c) (b) plus the learned surprise: the log of the last 15 minutes' squared returns over the seed-averaged learned model's one-step forecasts.
+
+  *Supported* if (c) has lower QLIKE than (b), with the 95% interval below zero.
+- **Exploratory:** secondary urgencies; costs by time of day and in calm vs busy hours; mean IS and the across-hour mean-variance objective.
+
+**Gate V (decision headroom).** Run on validation hours before any learned model is trained. For each market, the hour-volatility oracle + planner must have a mean risk-adjusted cost at least 3% below the constant-volatility planner's, with the 95% interval excluding zero. Markets that fail are reported as such. If neither passes, no learned models are trained.
+
+**Data and protocol:**
+- Binance spot BTCUSDT and ETHUSDT one-minute bars from the public archive, with checksums verified. The raw data is git-ignored.
+- Training January 2023 to June 2025; validation July to December 2025 (Gate V, model choice, code checks); test January to October 2026, used once by the final run.
+- Statistics: paired comparisons on the same hours; 95% intervals from a block bootstrap over days (2,000 resamples).
+- *Disclosure:* the calibration used November 2025 to October 2026 for price-direction tests and reported volatility for those periods. The feasibility check used November–December 2025. The test period has not been used for any volatility forecast or schedule comparison.
+
 ## Decision gates
 
 - **Gate A — simulator sanity:** passed (Stage 1).
 - **Gate B — headroom:** passed in all 21 settings tested (Stage 1).
 - **Gate C1 — misspecification headroom:** prespecified for Stage 3 (above).
-- **Gate C — learned vs classical vs simple rules:** after Stages 2–3, decide whether real data and the PPO comparison are justified. Stages 2 and 3 and the calibration are done; the decision is pending. Evidence: learning beats a misspecified model by small margins (Stage 3), and the public one-minute signals tested show essentially no out-of-sample predictability (next-minute R² at most about 0.01%, against 0.11% in the weakest Stage 1 setting).
+- **Gate C — learned vs classical vs simple rules:** after Stages 2–3, decide whether real data and the PPO comparison are justified. Stages 2 and 3 and the calibration are done. **Decision (28 November 2026):** switch the real-data stage from price-direction forecasts, which the calibration found unpredictable, to volatility forecasts (Stage 4). The PPO comparison is deferred. Evidence: learning beats a misspecified model by small margins (Stage 3), and the public one-minute signals tested show essentially no out-of-sample predictability (next-minute R² at most about 0.01%, against 0.11% in the weakest Stage 1 setting).
 
 ## Stage 1 summary
 
@@ -164,9 +228,11 @@ Conclusion: learning can beat a hand-specified model that is wrong in decision-r
 
 - Almgren, R., & Chriss, N. (2001). Optimal execution of portfolio transactions. *Journal of Risk*, 3(2), 5–39. [doi:10.21314/JOR.2001.041](https://doi.org/10.21314/JOR.2001.041)
 - Cont, R., Kukanov, A., & Stoikov, S. (2014). The price impact of order book events. *Journal of Financial Econometrics*, 12(1), 47–88. [arXiv:1011.6402](https://arxiv.org/abs/1011.6402)
+- Corsi, F. (2009). A simple approximate long-memory model of realized volatility. *Journal of Financial Econometrics*, 7(2), 174–196. [doi:10.1093/jjfinec/nbp001](https://doi.org/10.1093/jjfinec/nbp001)
 - Duchi, J., Shalev-Shwartz, S., Singer, Y., & Chandra, T. (2008). Efficient projections onto the ℓ1-ball for learning in high dimensions. *ICML*. [PDF](https://icml.cc/imls/conferences/2008/papers/361.pdf)
 - Erginbas, Y. E. (2026). [Intern Spotlight: HRT AI Labs Project](https://www.hudsonrivertrading.com/hrtbeat/intern-spotlight-hrt-ai-labs-project-2026/). Hudson River Trading.
 - Ha, D., & Schmidhuber, J. (2018). World models. [arXiv:1803.10122](https://arxiv.org/abs/1803.10122)
 - Hafner, D., Pasukonis, J., Ba, J., & Lillicrap, T. (2023). Mastering diverse domains through world models (DreamerV3). [arXiv:2301.04104](https://arxiv.org/abs/2301.04104)
 - Kalman, R. E. (1960). A new approach to linear filtering and prediction problems. *Journal of Basic Engineering*, 82(1), 35–45. [doi:10.1115/1.3662552](https://doi.org/10.1115/1.3662552)
 - Lehalle, C.-A., & Neuman, E. (2019). Incorporating signals into optimal trading. *Finance and Stochastics*, 23, 275–311. [doi:10.1007/s00780-019-00382-7](https://doi.org/10.1007/s00780-019-00382-7)
+- Patton, A. J. (2011). Volatility forecast comparison using imperfect volatility proxies. *Journal of Econometrics*, 160(1), 246–256. [doi:10.1016/j.jeconom.2010.03.034](https://doi.org/10.1016/j.jeconom.2010.03.034)
