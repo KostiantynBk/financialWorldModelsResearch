@@ -73,11 +73,12 @@ def _observations(paths: Paths, scales: Scales) -> np.ndarray:
 
 def train_world_model(paths: Paths, seed: int, max_steps: int = 3000, batch_size: int = 64,
                       times_per_batch: int = 8, lr: float = 3e-3, holdout: float = 0.2,
-                      eval_every: int = 25, patience: int = 12):
+                      eval_every: int = 25, patience: int = 12, architecture: dict | None = None):
     """Train on the given episodes, holding out 20% for early stopping on the price forecast.
 
     Each step uses a random batch of episodes and a random sample of decision times.
-    Returns (model, scales, info).
+    `architecture` overrides LatentWorldModel's sizes (hidden, latent, width); the default is
+    the Stage 2 model. Returns (model, scales, info).
     """
     torch.manual_seed(seed)
     rng = np.random.default_rng(seed)
@@ -99,7 +100,7 @@ def train_world_model(paths: Paths, seed: int, max_steps: int = 3000, batch_size
         sq = (preds - batch[:, target_time[times]]) ** 2  # (B, T, H, 2)
         return sq, mask[times][None, :, :, None]
 
-    model = LatentWorldModel()
+    model = LatentWorldModel(**(architecture or {}))
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     best, best_state, since_best, step = float("inf"), copy.deepcopy(model.state_dict()), 0, 0
     while step < max_steps and since_best < patience:
