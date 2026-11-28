@@ -89,3 +89,18 @@ def test_cumulative_forecasts_are_consistent():
     assert not np.isnan(out[1]).any()
     # The true model's one-step forecast is the filtered trend; five steps ahead adds its geometric fade.
     np.testing.assert_allclose(out[5][:, 0], out[1][:, 0] * (1 - params.phi**5) / (1 - params.phi))
+
+
+def test_forecast_comparison_is_exact_for_the_true_model():
+    from probe_stage2 import HORIZON, compare_forecasts, kalman_trend
+
+    params = MarketParams()
+    paths = simulate(params, 50, seed=17)
+    trend = kalman_trend(params, paths)
+    forecasts = trend[..., None] * params.phi ** np.arange(HORIZON)
+    out = compare_forecasts(forecasts, trend, params.phi)
+    for key in ["size_1min", "size_10min", "size_20min", "size_30min", "total_30min_size", "total_30min_corr"]:
+        assert np.isclose(out[key], 1.0)
+    assert np.isclose(out["total_30min_rel_error"], 0.0)
+    half = compare_forecasts(0.5 * forecasts, trend, params.phi)  # a forecast at half the right size
+    assert np.isclose(half["total_30min_size"], 0.5) and np.isclose(half["total_30min_rel_error"], 0.25)
