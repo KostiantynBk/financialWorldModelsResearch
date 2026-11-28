@@ -61,6 +61,7 @@ Because the market is exogenous in Stages 1–4, the only part that can be learn
   - decision quality: mean implementation shortfall in bps of arrival notional, CVaR95, completion diagnostics
   - Stage 2 deviation: the learned model gives point forecasts, so forecast quality is reported as R² at 1, 5 and 15 minutes and to the deadline instead of likelihood scores. Every policy completes the order by construction.
 - **Statistics:** paired 95% intervals. They use a normal approximation for independent simulated episodes and a block bootstrap by day for real data. Each learned model is trained with at least five seeds.
+- **Probing learned models:** any readout from a learned model's internal state is compared with the same readout from untrained networks of the same architecture. Decision value is judged by the forecasts the planner uses, not by what the internal state contains. See the [Stage 2 supplement](results/stage2_probe.md).
 - **Reporting:** training budgets (data size, steps, wall-clock time, parameter count) are reported. Negative results are reported.
 
 ## Decision gates

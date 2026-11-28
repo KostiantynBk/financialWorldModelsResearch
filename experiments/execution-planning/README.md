@@ -75,9 +75,10 @@ It is trained self-supervised to predict future observations at all horizons by 
 ```bash
 cd experiments/execution-planning
 pip install -r requirements.txt
-python -m pytest -q        # 16 correctness tests
+python -m pytest -q        # 17 correctness tests
 python run_stage1.py       # about 3 minutes on a laptop CPU; writes results/
 python run_stage2.py       # about 23 minutes on a laptop CPU; writes results/stage2*
+python probe_stage2.py     # about 30 minutes; Stage 2 supplement, writes results/stage2_probe*
 ```
 
 Tested with Python 3.14, NumPy 2.4, SciPy 1.17, PyTorch 2.12 (CPU) and pytest 9.1. Seeds: Stage 1 training 101 (10,000 episodes) and validation 202 (20,000 episodes). Stage 2 training seeds 101–105 (one per run) and test seed 303 (20,000 episodes), first used in Stage 2.
@@ -91,6 +92,7 @@ Tested with Python 3.14, NumPy 2.4, SciPy 1.17, PyTorch 2.12 (CPU) and pytest 9.
 - Stage 2's planner reproduces Stage 1's planner exactly when given the true model.
 - The fitted model's likelihood matches a direct multivariate-normal calculation, and maximum likelihood recovers the true parameters from 1,000 episodes.
 - The learned model's forecast is sign-symmetric, and multi-horizon forecasts are consistent.
+- The supplement's forecast comparison is exact for the true model and scales correctly.
 
 ## Stage 1 results
 
@@ -163,6 +165,37 @@ Full tables are in [results/stage2.md](results/stage2.md), with per-run values i
 3. **Forecast scores and decision value can disagree.** At 50 hours, the learned model's R² to the deadline averaged zero, yet its planner captured 80% of the headroom. Across the 15 models, the 5-minute R² tracked cost most closely (Spearman −0.83, against −0.66 for R² to the deadline). This is exploratory: the training sets are nested and the sample is small.
 4. **Small data is fragile.** One of the five 50-hour models captured only 49% of the headroom, and its tail cost was close to TWAP's.
 5. **The true-model planner is not exactly optimal.** At 50 hours, the fitted classical model + planner was 0.02 bps cheaper than the true model + planner [0.02, 0.03]. The fitted models' half-lives were slightly too short on average (9.2 steps against 10). This is consistent with Stage 1's caveat that the certainty-equivalent planner is not proven optimal under the no-sell constraint. The cause is untested.
+
+### Stage 2 supplement: what did the learned model learn?
+
+Exploratory. Full tables are in [results/stage2_probe.md](results/stage2_probe.md), from [probe_stage2.py](probe_stage2.py). The 15 learned models were retrained with the same data and seeds, and each reproduces its published test cost exactly. In simulation the hidden trend is known, so each model can be checked on 2,000 fresh hours.
+
+**Storing the trend is easy: an untrained network does it too.** R² of a linear readout of the true trend:
+
+| Source | Trend R² |
+|---|---:|
+| True model (best achievable) | 0.729 |
+| Learned model's memory, any training size | 0.726–0.728 |
+| **Untrained network's memory** (same architecture) | **0.727–0.728** |
+| Latest 10 signals | 0.724 |
+| Latest signal only | 0.504 |
+
+The trend is close to a weighted average of recent signals, and any recurrent memory keeps those. A memory readout therefore cannot show what training added here.
+
+**What training must get right is the forecast.** The learned model's 30-minute price forecast against the true model's (mean [min, max] over runs):
+
+| Training hours | Correlation | Size (1 = right) | Relative error (0 = identical) |
+|---:|---|---|---|
+| 50 | 0.836 [0.730, 0.910] | 0.83 [0.23, 1.60] | 0.52 [0.21, 0.89] |
+| 200 | 0.962 [0.937, 0.997] | 0.95 [0.62, 1.27] | 0.13 [0.01, 0.19] |
+| 1,000 | 0.985 [0.951, 0.998] | 1.06 [0.99, 1.16] | 0.04 [0.01, 0.10] |
+
+Across the 15 models, the forecast's relative error tracks the cost above the true model (Spearman +0.73, p = 0.002); the memory readout does not (−0.10, p = 0.71). The weakest 50-hour model forecast at a quarter of the right size, so its planner behaved almost like TWAP and captured 49% of the headroom. The best 50-hour model forecast at the right size and captured 96%.
+
+**Lessons:**
+1. Compare any readout of a learned model's internal state with an untrained network of the same architecture. A related caution appears in [Merchant et al. (2026)](https://arxiv.org/abs/2610.09048): no tested self-supervised encoder beat a frozen, randomly initialized one on their spread-change probe.
+2. Judge a world model by the forecasts its planner uses, not by what its internal state contains.
+3. With little data, the learned model's main failure was getting the size of its forecasts wrong, not missing the trend.
 
 ## Limitations
 
