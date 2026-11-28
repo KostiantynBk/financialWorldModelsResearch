@@ -1,6 +1,6 @@
 # Execution planning with a market model
 
-**Status:** Stage 1 (simulator checks and planning headroom) completed on 25 November 2026. Stage 2 (a learned world model and a fitted classical model) completed on 27 November 2026. All results come from a synthetic market with illustrative parameters. They say nothing about real markets or live trading. The staged [research plan](PLAN.md) is updated as results arrive.
+**Status:** Stage 1 (simulator checks and planning headroom) completed on 25 November 2026. Stage 2 (a learned world model and a fitted classical model) completed on 27 November 2026. Stage 3 (markets that break the classical model's assumptions) completed on 28 November 2026. All results come from a synthetic market with illustrative parameters. They say nothing about real markets or live trading. The staged [research plan](PLAN.md) is updated as results arrive.
 
 **Terminology:** Stage 1's planner uses a *hand-specified model*: our own equations with the simulator's true parameters. In this repository, *world model* means a model learned from data; the first learned model is tested in Stage 2.
 
@@ -60,6 +60,8 @@ Model-based strategies are named *predictor + planner*. Every one uses the same 
 | True trend (not achievable) + planner | Sees the true drift, which no real policy can. It shows how much better drift estimates could help. | No |
 | **Fitted classical model + planner** (Stage 2) | The true model's equations, with the fade rate, trend size and noise levels estimated from training episodes by maximum likelihood | Four parameters fitted |
 | **Learned model + planner** (Stage 2) | A small neural network that reads price changes and signals minute by minute, builds its own state, and forecasts future price changes. It is given none of the simulator's equations. | Trained on training episodes |
+| Fitted regime-aware model + planner (Stage 3, scenarios A and B) | The correct two-regime structure of the scenario, with all parameters estimated by maximum likelihood | Six parameters fitted |
+| Larger learned model + planner (Stage 3) | The learned model with a 32-unit memory and a 16-dimensional latent state (6,146 parameters), chosen on validation hours | Trained on training episodes |
 
 For risk-neutral costs with linear impact, the planner's schedule is the Euclidean projection of the forecast drift to the deadline, scaled by 1/(2κ), onto the set of non-negative schedules that complete the order. It therefore needs no iterative optimization.
 
@@ -75,10 +77,14 @@ It is trained self-supervised to predict future observations at all horizons by 
 ```bash
 cd experiments/execution-planning
 pip install -r requirements.txt
-python -m pytest -q        # 17 correctness tests
+python -m pytest -q        # 25 correctness tests
 python run_stage1.py       # about 3 minutes on a laptop CPU; writes results/
 python run_stage2.py       # about 23 minutes on a laptop CPU; writes results/stage2*
 python probe_stage2.py     # about 30 minutes; Stage 2 supplement, writes results/stage2_probe*
+python run_stage3.py gate      # Stage 3 Gate C1 on validation hours, about 3 minutes
+python run_stage3.py select    # choose the larger learned model on validation hours, about 15 minutes
+python run_stage3.py main A    # test run for one scenario (A, B, C or D), 1-2.5 hours each; run them in parallel
+python run_stage3.py report    # writes results/stage3*
 ```
 
 Tested with Python 3.14, NumPy 2.4, SciPy 1.17, PyTorch 2.12 (CPU) and pytest 9.1. Seeds: Stage 1 training 101 (10,000 episodes) and validation 202 (20,000 episodes). Stage 2 training seeds 101–105 (one per run) and test seed 303 (20,000 episodes), first used in Stage 2.
@@ -93,6 +99,8 @@ Tested with Python 3.14, NumPy 2.4, SciPy 1.17, PyTorch 2.12 (CPU) and pytest 9.
 - The fitted model's likelihood matches a direct multivariate-normal calculation, and maximum likelihood recovers the true parameters from 1,000 episodes.
 - The learned model's forecast is sign-symmetric, and multi-horizon forecasts are consistent.
 - The supplement's forecast comparison is exact for the true model and scales correctly.
+- Stage 3: the scenario simulator reproduces Stage 1's simulator in the base case, and each scenario matches its design (average trend strength, equal signal variance across A's regimes, B's persistence, C's outlier variance and kurtosis).
+- Stage 3: the best-possible forecaster equals the Kalman filter on the base market, ignores duplicated regimes, has no look-ahead, beats the misspecified Kalman filter in A, B and C, and agrees with a particle filter in C. The regime-aware fit recovers scenario A's parameters.
 
 ## Stage 1 results
 
@@ -197,6 +205,66 @@ Across the 15 models, the forecast's relative error tracks the cost above the tr
 2. Judge a world model by the forecasts its planner uses, not by what its internal state contains.
 3. With little data, the learned model's main failure was getting the size of its forecasts wrong, not missing the trend.
 
+## Stage 3 results: when the classical model's assumptions are wrong
+
+Prespecified in the [plan](PLAN.md#stage-3-prespecification) before any Stage 3 code was run. Full tables are in [results/stage3.md](results/stage3.md), with per-run values in [results/stage3_runs.csv](results/stage3_runs.csv).
+
+**Scenarios.** Each keeps the base case's average signal strength and cost model, but breaks one assumption of the fitted classical model. Regimes are drawn once per hour.
+
+| | Scenario | What breaks |
+|---|---|---|
+| A | Signal on/off | In half the hours the signal is pure noise; in the others it is twice as informative |
+| B | Fast or slow trends | Trends fade with a half-life of 2 minutes in some hours and 60 in others (the severe setting; see Gate C1) |
+| C | Signal outliers | 5% of signal readings carry 5 times larger noise (the severe setting) |
+| D | Price outliers (negative control) | Outliers in prices instead; expected not to matter for decisions |
+
+For each scenario, the *true model* is the best possible forecaster given the scenario's structure: posterior-weighted Kalman filters for A and B, and a Gaussian-sum filter for C and D that matched a particle filter's trend estimates (R² 0.797 against 0.797 in C).
+
+**Gate C1 (misspecification headroom), on validation hours.** Learned models were trained only where the misspecified classical model fell at least 0.15 bps short of the best possible forecaster:
+- A passed at its prespecified setting, with a gap of +0.24 bps [+0.18, +0.30].
+- B and C fell short at their prespecified settings (+0.09 each) and passed at their prespecified severe settings (+0.15 and +0.16).
+- D failed (+0.02), as predicted.
+
+The violations that hurt the classical model most still cost it only 0.1–0.3 bps.
+
+**Test results** (20,000 test hours, 5 runs; mean cost in bps, lower is better):
+
+| Scenario | Training hours | Best simple rule | Fitted classical model + planner | Fitted regime-aware model + planner | Learned model + planner | Larger learned model + planner | True model + planner |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| A | 200 | +1.56 | −0.37 | −0.65 | −0.22 | −0.11 | −0.67 |
+| A | **1,000** | +1.37 | −0.40 | −0.67 | **−0.47** | −0.46 | −0.67 |
+| A | 5,000 | +1.37 | −0.41 | −0.67 | −0.57 | −0.52 | −0.67 |
+| B | 200 | +1.42 | −1.67 | −1.78 | −1.58 | −1.42 | −1.78 |
+| B | **1,000** | +1.42 | −1.66 | −1.77 | **−1.64** | −1.66 | −1.78 |
+| B | 5,000 | +1.42 | −1.67 | −1.78 | −1.71 | −1.69 | −1.78 |
+| C | 200 | +1.40 | −1.42 | — | −1.15 | −0.97 | −1.54 |
+| C | **1,000** | +1.40 | −1.43 | — | **−1.47** | −1.44 | −1.54 |
+| C | 5,000 | +1.40 | −1.43 | — | −1.47 | −1.46 | −1.54 |
+| D | 1,000 | +1.37 | −1.41 | — | −1.36 | — | −1.42 |
+
+**Primary hypothesis H4b: the learned model + planner costs less than the fitted classical model + planner at 1,000 training hours.**
+
+| Scenario | Learned − fitted classical (bps) [95% CI] | Bonferroni-corrected [98.3%] | Share of the classical model's shortfall recovered | Verdict |
+|---|---|---|---:|---|
+| A Signal on/off | −0.07 [−0.10, −0.05] | [−0.11, −0.04] | 27% | **Supported** |
+| B Fast or slow trends | +0.02 [−0.01, +0.05] | [−0.02, +0.06] | none | **Not supported** |
+| C Signal outliers | −0.04 [−0.07, −0.02] | [−0.07, −0.02] | 38% | **Supported** |
+
+**Secondary results:**
+- **More data helps the learned model; the misspecified classical model stays put.** With 5,000 hours, the learned model beats the fitted classical model in all three scenarios: A −0.17 [−0.20, −0.13], B −0.04 [−0.08, −0.00], C −0.03 [−0.06, −0.00]. With 200 hours it loses in all three (+0.09 to +0.27).
+- **A correctly structured classical model beats learning.** Where it was tested (A and B), the fitted regime-aware model was cheaper than the learned model at every size: by 0.20 and 0.13 bps at 1,000 hours, and 0.10 and 0.06 at 5,000. It stays within about 0.01 bps of the true model.
+- **The larger learned model did not help.** At 1,000 hours it was within 0.03 bps of the primary model, it was slightly worse at 5,000 hours, and it failed badly in two 200-hour runs.
+- **Against the best simple rule,** every model-based strategy is cheaper, by 1.7–3.2 bps on average.
+- **Negative control:** in D the learned model was slightly costlier than the classical model (+0.05 [+0.04, +0.06]), so there is no sign of spurious wins from planner artifacts.
+- **Where the gain comes from in A:** the learned model gains mainly in quiet hours, where it trades less on a noise-only signal (+1.90 bps against the fitted classical model's +2.07; the true model gets +1.55). In active hours, the two are nearly level.
+- **Tail cost:** the learned model's CVaR95 was similar to or below the true model's (for example 41.2 against 43.3 bps in A at 1,000 hours), because the true-model planner trades more aggressively on its forecasts. The objective is mean cost, so this is reported, not optimized.
+
+**What to take from this:**
+1. **Learning beats a hand-specified model that is wrong in ways that matter, but the margin is small.** With 1,000 training hours it recovers 27% (A) and 38% (C) of the classical model's shortfall, worth 0.04–0.07 bps, about $4–7 per $1M order. In B, 1,000 hours were not enough.
+2. **Knowing the right structure beats learning it.** A classical model with the correct regime structure was better still. The learned model's value is that it does not need the structure to be known in advance; it still pays for that in data.
+3. **Learning gains grow with data.** From 1,000 to 5,000 hours the learned model moved closer to the ceiling in A and B (in C it stayed about 0.08 bps short), while the misspecified classical model could not improve.
+4. **These gaps are small relative to the gain from planning itself** (about 2–3 bps over the best simple rule). The bigger question for real markets remains whether real signals are predictive enough, which the planned calibration on real data measures.
+
 ## Limitations
 
 - **Parameters:** illustrative and uncalibrated. Headroom depends strongly on signal strength and persistence.
@@ -205,10 +273,12 @@ Across the 15 models, the forecast's relative error tracks the cost above the tr
 - **Planner:** plans on the expected drift path (certainty equivalence). Under a binding constraint this is not proven optimal.
 - **Statistics:** confidence intervals use a normal approximation over independent episodes. Stage 1 uses one validation seed. In Stage 2, intervals for run-averaged costs exclude run-to-run variation, which is shown separately over only five runs.
 - **Learned model:** one small architecture with no hyperparameter search. Its settings were chosen in development runs on separate seeds (training 1000, evaluation 304). It gives point forecasts only, so the plan's likelihood-based forecast scores and interval calibration are not reported.
-- **Comparison design:** in Stage 2 the classical model has exactly the simulator's form, which favors it by construction.
+- **Comparison design:** in Stage 2 the classical model has exactly the simulator's form, which favors it by construction. In Stage 3 the scenarios are our own choice of violations; other violations could favor learning more or less.
+- **Stage 3 scenarios:** regimes reset every hour, and strategies get no data from earlier hours, which makes regime detection harder than with persistent regimes. B and C ran at their prespecified severe settings because the prespecified settings did not leave enough headroom (Gate C1). Forecast metrics use the first 5,000 of the 20,000 test hours.
+- **Stage 3 test-seed use:** an aborted launch ran for a few seconds before the reported run and produced no results.
 - **Test seed use:** before the reported run, a code check ran on 500 test hours with deliberately undertrained models, and an aborted first launch computed only the TWAP and true-model test costs. No setting was changed afterwards.
 - **Scope:** synthetic results only. They are not evidence about real markets or live trading.
 
-## Next step (Stage 3)
+## Next step
 
-Stage 3 keeps the same strategies but breaks the classical model's assumptions in the simulator: regime switches in signal strength, fat-tailed price shocks and drifting signal quality. The question is whether the learned model, which assumes no equations, then beats the fitted classical model (the second half of H4). See the [research plan](PLAN.md) for the hypotheses and later stages.
+Stages 2 and 3 complete the synthetic comparison of learned and hand-specified models. Gate C in the [research plan](PLAN.md) now decides whether a real-data stage and the PPO comparison are justified. The most informative next measurement is the planned calibration on public crypto data: how strongly, and for how long, real signals predict the next minutes' price moves. That places real markets within the Stage 1 headroom table and tells us whether planning has anything to gain there.

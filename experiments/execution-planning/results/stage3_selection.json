@@ -1,0 +1,67 @@
+{
+ "eligible": [
+  "A",
+  "B",
+  "C"
+ ],
+ "means": {
+  "GRU 32": -1.234713777367208,
+  "GRU 64": -1.1969392754022727
+ },
+ "chosen": "GRU 32",
+ "architecture": {
+  "hidden": 32,
+  "latent": 16,
+  "width": 64
+ },
+ "rows": [
+  {
+   "candidate": "GRU 32",
+   "scenario": "A",
+   "validation_bps": -0.453964371091644,
+   "parameters": 6146,
+   "steps": 975,
+   "seconds": 113.01982164382935
+  },
+  {
+   "candidate": "GRU 32",
+   "scenario": "B",
+   "validation_bps": -1.7392739213535497,
+   "parameters": 6146,
+   "steps": 1825,
+   "seconds": 171.52721667289734
+  },
+  {
+   "candidate": "GRU 32",
+   "scenario": "C",
+   "validation_bps": -1.5109030396564307,
+   "parameters": 6146,
+   "steps": 1400,
+   "seconds": 139.7936553955078
+  },
+  {
+   "candidate": "GRU 64",
+   "scenario": "A",
+   "validation_bps": -0.4764151213809328,
+   "parameters": 16258,
+   "steps": 975,
+   "seconds": 113.87872552871704
+  },
+  {
+   "candidate": "GRU 64",
+   "scenario": "B",
+   "validation_bps": -1.7254146625173394,
+   "parameters": 16258,
+   "steps": 1525,
+   "seconds": 166.88695907592773
+  },
+  {
+   "candidate": "GRU 64",
+   "scenario": "C",
+   "validation_bps": -1.3889880423085461,
+   "parameters": 16258,
+   "steps": 750,
+   "seconds": 91.9624879360199
+  }
+ ]
+}

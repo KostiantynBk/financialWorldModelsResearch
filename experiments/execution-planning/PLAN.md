@@ -1,6 +1,6 @@
 # Research plan: execution planning with a market model
 
-**Last updated:** 28 November 2026. **Status:** Stages 1 and 2 complete. Stage 3 is prespecified below and has not been run. This plan is updated as results arrive. Results are in the [experiment README](README.md) and [results/](results/).
+**Last updated:** 28 November 2026. **Status:** Stages 1, 2 and 3 complete. The Gate C decision (real data and the PPO comparison) is next. This plan is updated as results arrive. Results are in the [experiment README](README.md) and [results/](results/).
 
 ## Question
 
@@ -35,7 +35,7 @@ Because the market is exogenous in Stages 1–4, the only part that can be learn
 |---|---|---|---|---|
 | **1** | Hand-specified, with the simulator's true parameters (ceiling) | Linear-Gaussian simulator | Are the simulator and planner correct? Is there headroom over simple rules? | **Done** (25 Nov 2026) |
 | **2** | **Learned world model:** a small recurrent neural predictor; plus a fitted hand-specified model as the classical baseline | Same simulator | Can a learned model match the classical model when the classical assumptions hold? How much data does it need? | **Done** (27 Nov 2026) |
-| **3** | Same models, plus a fitted regime-aware classical model and a larger learned variant | Misspecified simulator: regime switches, fat-tailed shocks, drifting signal strength | Does learning beat hand-specification when its assumptions are wrong? | Prespecified (28 Nov 2026) |
+| **3** | Same models, plus a fitted regime-aware classical model and a larger learned variant | Misspecified simulator: regime switches, fat-tailed shocks, drifting signal strength | Does learning beat hand-specification when its assumptions are wrong? | **Done** (28 Nov 2026) |
 | **4** | Same, trained on historical data | Real crypto market data, with chronological splits | Do the gains survive on a real market? | Planned |
 | **5** | Action-conditioned learned model; the planner searches candidate plans | Simulator with market impact | Can a model learn how our trades move the market, and does planning with it help? | Planned |
 | Secondary | Model-free PPO (HRT-style) | As in Stages 2–3 | Is it better to plan with a model or to learn a policy directly? | Planned |
@@ -47,7 +47,7 @@ Because the market is exogenous in Stages 1–4, the only part that can be learn
 - **H1 (primary):** A planner using a learned world model beats the best simple rule on mean paired implementation shortfall on held-out test episodes. The best simple rule is TWAP or the tuned urgency rule, selected on training data. Prespecified: base-case parameters, training sets of 50, 200 and 1,000 episodes, test seed 303. *Falsified if* the 95% interval includes zero or favors the rule. *Supported in Stage 2 at all three training sizes (synthetic base case).*
 - **H2 (headroom):** The gain grows with signal strength and persistence, and is zero without a signal. *Supported in Stage 1 with the true model.*
 - **H3 (model error → decision loss):** The gap between true-model and learned-model planning shrinks as forecast error falls. *Supported in Stage 2, with a plateau from 200 training episodes.*
-- **H4 (learning vs hand-specification):** The learned model matches the fitted hand-specified model when the simulator matches that model's assumptions (Stage 2), and beats it when it does not (Stage 3). *Stage 2 half not supported in the strict sense: the fitted model was cheaper at every training size, by 0.06 bps from 200 episodes.*
+- **H4 (learning vs hand-specification):** The learned model matches the fitted hand-specified model when the simulator matches that model's assumptions (Stage 2), and beats it when it does not (Stage 3). *Stage 2 half not supported in the strict sense: the fitted model was cheaper at every training size, by 0.06 bps from 200 episodes. Stage 3 half supported in two of three scenarios (H4b below), by small margins.*
 - **H5 (memory):** Using the signal's history beats using only the latest reading. *Supported in Stage 1 with the true model.*
 - **H6 (secondary):** Planning with a learned model matches or beats model-free PPO with memory, at equal training data and completion.
 - **Planned ablation:** the planner versus the same forecast fed to a tuned simple rule. This separates the value of planning from the value of forecasting.
@@ -93,6 +93,7 @@ Registered on 28 November 2026, before any Stage 3 code was run. Changes after t
 - **H4b (primary).** In each main scenario (A, B, C) that passes Gate C1, the learned model + planner has a lower mean test cost than the fitted classical model + planner, at 1,000 training hours.
   - *Supported* if the paired 95% interval of (learned − fitted) lies entirely below zero.
   - We also report whether it survives a Bonferroni correction over the three scenarios (98.3% intervals).
+  - *Result: supported in A (−0.07 bps [−0.10, −0.05]) and C (−0.04 [−0.07, −0.02]), both surviving the correction; not supported in B (+0.02 [−0.01, +0.05]).*
 - **Secondary:**
   - the learned model + planner beats the best simple rule at 1,000 hours;
   - its cost above the ceiling shrinks with training data and as its forecast approaches the ceiling's forecast;
@@ -112,6 +113,8 @@ Registered on 28 November 2026, before any Stage 3 code was run. Changes after t
 - Validation seed 212 is used for Gate C1, model selection and all code checks. Test seed 313 (20,000 hours) is used only by the final run.
 - Base shocks are shared across scenarios (common random numbers); regime and outlier draws use a separate random stream.
 
+**Deviations and implementation notes (added after the run):** B and C ran at their severe settings, as the Gate C1 rule required. Forecast metrics use the first 5,000 of the 20,000 test hours. The particle-filter check used 1,000 validation hours and 2,000 particles. An aborted launch ran for a few seconds before the reported run and produced no results. No hypothesis, threshold, seed or model setting was changed.
+
 **Metrics:**
 - mean implementation shortfall with paired 95% intervals, and run-to-run ranges;
 - CVaR95;
@@ -125,7 +128,7 @@ Registered on 28 November 2026, before any Stage 3 code was run. Changes after t
 - **Gate A — simulator sanity:** passed (Stage 1).
 - **Gate B — headroom:** passed in all 21 settings tested (Stage 1).
 - **Gate C1 — misspecification headroom:** prespecified for Stage 3 (above).
-- **Gate C — learned vs classical vs simple rules:** after Stages 2–3, decide whether real data and the PPO comparison are justified. Stage 2 is done; the decision follows Stage 3.
+- **Gate C — learned vs classical vs simple rules:** after Stages 2–3, decide whether real data and the PPO comparison are justified. Stages 2 and 3 are done; the decision is pending.
 
 ## Stage 1 summary
 
@@ -136,6 +139,19 @@ The no-sell constraint binds often, so the closed-form optimum does not apply di
 ## Stage 2 summary
 
 On 20,000 test hours, a learned model with 1,666 parameters plus the planner beat TWAP, the best simple rule, at all three training sizes. It captured 80% of the true model's 2.91 bps headroom with 50 training episodes, and 98% with 200 or 1,000. The fitted classical model, which has exactly the simulator's form, reached the ceiling from 50 episodes. It was cheaper than the learned model at every size, by 0.06 bps from 200 episodes. Decision loss fell as the learned forecast improved, but stayed flat between 200 and 1,000 episodes. Full details are in the [experiment README](README.md).
+
+## Stage 3 summary
+
+Gate C1 on validation hours:
+- A passed at its prespecified setting (gap +0.24 bps).
+- B and C passed only at their severe settings (+0.15 and +0.16).
+- The negative control D failed (+0.02), as predicted.
+
+On 20,000 test hours with 1,000 training hours, the learned model + planner beat the misspecified fitted classical model in A (−0.07 bps [−0.10, −0.05]) and C (−0.04 [−0.07, −0.02]), both surviving a Bonferroni correction. In B it did not (+0.02 [−0.01, +0.05]). That recovers 27% and 38% of the classical model's shortfall from the ceiling in A and C. With 5,000 hours the learned model was ahead in all three scenarios; with 200 hours it was behind in all three.
+
+A fitted classical model with the correct regime structure beat the learned model in A and B at every training size. The larger learned variant did not improve on the primary one. In D the learned model did not beat the classical model (+0.05 [+0.04, +0.06]).
+
+Conclusion: learning can beat a hand-specified model that is wrong in decision-relevant ways, but by small margins (about 0.04–0.07 bps here, against 2–3 bps of planning value over simple rules), and less than a correctly specified model would. Full details are in the [experiment README](README.md).
 
 ## Scope and assumptions
 
